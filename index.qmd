@@ -2,7 +2,7 @@
 project:
   type: website
   title: "Faulkner and Punctuation"
-  output-dir: docs
+
 
 website:
   title: "White Paper: Faulkner and the Politics of the Long Sentence"
