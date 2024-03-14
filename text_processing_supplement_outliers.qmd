@@ -1,0 +1,728 @@
+---
+title: "Text Processing Supplement: Outliers"
+author: "Johannes Burgers"
+format:
+  html:
+    theme: cosmo
+    css: styles.css
+    toc: true
+    code-fold: true
+editor: visual
+---
+
+## Precursors
+
+Load in packages
+
+```{r packages}
+#| warning: false
+
+library(tidyverse)
+library(tidytext)
+library(qdapRegex )
+
+library(EnvStats)
+library(ggpubr)
+
+library(univOutl)
+```
+
+### Preprocess data
+
+The data preprocessing for this data set and that of the character matching in data set 2 is slightly different. Whereas that data set had to manually modified to align with the DY database, this data set is fuller and is a slightly less adulterated version of punctuation patterns in Faulkner. That said, it would be a mistake to suggest that this is the more "correct" version. It includes more texts.
+
+```{r load_data}
+
+
+all_works_original <-
+  list.files(file.path("data"), full.names = TRUE, pattern = "*.txt") %>% #grab a list of all the files with .txt extension
+  #the full.names value needs to set to TRUE to get the full path. For some reason you will get a "permission denied" error if you do not do this.
+  map_df(~ tibble(  #the map function performs the same command on all parts of the data set. In this case the .txt files
+    text = read_file(.), #read the files
+    date = ifelse(
+      str_detect(basename(.), "[:digit:]{4}") == TRUE,
+      str_extract(basename(.), "[:digit:]{4}"),
+      NA), #see if there is a date in yyyy format, i.e. 1987, and extract the date, if it can't find date NA
+    title=str_extract(basename(.), "(?<=_)[:alpha:]*"),
+    code=str_extract(basename(.), "[:upper:]+"),
+    revised = str_detect(basename(.),"_revised")
+  )) 
+
+```
+
+## Tidy text
+
+There are various features of the text files that cause issues with determining sentence length. They are abbreviations, titles with a period such as Mr. and Mrs., and ellipses. These have all been edited, so that the sentences in each text can be properly delimited.
+
+```{r tidy_texts}
+
+
+all_works_tidy_string_original <- all_works_original %>%
+  group_by(title, date, code) %>%
+  mutate(text = rm_abbreviation(text, replacement = "abbreviationremoved ")) %>%
+  mutate(text = str_replace_all(text, "Mr\\.", "Mr ")) %>%
+  mutate(text = str_replace_all(text, "Mrs\\.", "Mrs ")) %>%
+  mutate(text = str_replace_all (text, "\\.\\.\\.", " punctellipse ")) %>%
+  mutate(text = str_replace_all (text, "\\.\\s\\.\\s\\.\\s", " punctellipse ")) %>%
+  mutate(text = str_replace_all(text, "\u2026", " punctellipse ")) %>%
+  mutate(text = str_squish(text)) %>%
+  mutate(text = str_replace_all(text, "—", " - ")) %>%
+  mutate(work_length = str_count(text, "\\S+")) %>%
+  mutate(type = ifelse(work_length > 40000, "novel", "short_story")) %>%
+  mutate(cleaned = str_to_lower(text)) 
+  
+```
+
+```{r}
+revised_works_percent <- all_works_tidy_string_original %>% 
+                        group_by(revised) %>% 
+                          summarise(work_length=sum(work_length)) %>% 
+                          mutate(percent= work_length/(sum(work_length)))
+```
+
+
+## Descriptive Statistics
+
+
+The relative make up of the corpus by text type.
+
+```{r corpus_type_ratio}
+
+#Descriptive statistics. These are used in the introduction to the essay.
+
+#This calculates the percentage breakdown of the corpus. All functions have been left verbose for clarity.
+
+corpus_percent_novel_short_story <- all_works_tidy_string_original %>%
+  group_by(type) %>%
+  summarise (work_type_length = sum(work_length)) %>%
+  ungroup() %>%
+  mutate(percent = work_type_length / sum(work_type_length))
+
+corpus_percent_novel_short_story %>% 
+  select(-work_type_length)
+
+```
+
+```{r dy_corpus_size}
+corpus_percent_dy_nondy <- all_works_tidy_string_original %>%
+  mutate(type = ifelse(code == "ZZ", "notDY", "DY")) %>%
+  group_by(type) %>%
+  summarise (work_type_length = sum(work_length)) %>%
+  ungroup() %>%
+  mutate(percent = work_type_length / sum(work_type_length))
+
+corpus_percent_dy_nondy
+
+```
+
+```{r corpus_composition}
+corpus_percent_all <- corpus_percent_novel_short_story %>% 
+                      bind_rows(corpus_percent_dy_nondy)
+
+corpus_percent_all
+```
+
+## Sentence Counts
+
+```{r unnest_sentences}
+#Create sentences using regex unnest. This works better than unnest_sentences in tidytext library, which drops all columns.
+
+all_works_punctuation <-
+  all_works_tidy_string_original %>%
+  ungroup() %>%
+  group_by(title, date, code, type, revised) %>%
+  unnest_regex(sentence, cleaned, "[.?!]") %>%
+  mutate(sentence = str_replace(sentence, "”(?=\\s{1})", "")) %>%
+  mutate (string_length = str_count(sentence, "\\S+")) %>%
+  filter(string_length > 0) %>%
+  mutate(ellipse = str_count(sentence, "punctellipse")) %>%
+  mutate(comma = str_count(sentence, "\\,")) %>%
+  mutate(semi_colon = str_count(sentence, "\\;")) %>%
+  mutate(dash = str_count(sentence, "-")) %>%
+  mutate(colon = str_count(sentence, "\\:")) %>%
+  mutate(parenthesis = str_count(sentence, "[\\(\\)]")) 
+  
+
+# Even though it takes up unnecessary memory the sentence column is maintained to verify that the sentences are being parsed correctly.
+  
+  
+```
+
+```{r total_duplicate_text}
+
+# These calculations were used to get a sense of how much duplicated text there is between GDM and the stories and likewise Unvanquished and the stories. This is not a whole lot.
+
+all_works_punctuation_duplicate <- all_works_punctuation %>% 
+                                    ungroup()  %>% 
+                                      count(sentence) %>% 
+                                      filter(n>1)
+
+all_works_unique_removed <- all_works_punctuation %>% 
+                            right_join(all_works_punctuation_duplicate) %>% 
+                            group_by(title) %>% 
+                            distinct(sentence, .keep_all = TRUE)
+                                
+duplicate_sentences <- all_works_unique_removed %>% 
+                        arrange(desc(string_length), sentence) %>% 
+                        filter(string_length>6) %>% 
+                        ungroup() %>% 
+                        distinct(sentence,string_length) %>% 
+                        summarise(total_duplicates= sum(string_length)) 
+
+percent_duplicate <- duplicate_sentences %>% 
+                      mutate(duplicate_percent = total_duplicates/sum(revised_works_percent$work_length))
+                      
+
+```
+
+## Summary Statistics and Exploratory Data Analysis
+
+Create punctuation table and remove *Requiem* because the punctuation patterns do not match that of a novel. This table is used continuously downstream. It produces the relative frequencies of punctuation in the corpus.
+
+```{r summary_punctuation}
+# Create punctuation table and remove Requiem because the punctuation patterns do not match that of a novel. This table is used continuously downstream. It produces the relative frequencies of punctuation in the corpus.
+
+summary_punctuation <- all_works_punctuation %>%
+  group_by(title, date, code, type) %>%
+  filter(title != 'requiem') %>% 
+  summarise(across(string_length:parenthesis, ~ mean(.x))) 
+  
+summary_punctuation %>% slice_max(10)
+  
+```
+This calculates the percent long sentences for each work. A long sentence is any sentence that exceeds the corpus average. 
+
+```{r average_sentence_lengths}
+
+#This calculates the percent long sentences for each work. A long sentence is any sentence that exceeds the corpus average (corpus_mean_string_length)
+
+sentence_length_by_work <- all_works_punctuation %>%
+  group_by(title, code) %>%
+  summarise(average_string_length = mean(string_length))
+
+corpus_mean_string_length <- sentence_length_by_work %>%
+  ungroup() %>%
+  summarise(corpus_mean_string_length = mean(average_string_length)) %>%
+  pull(corpus_mean_string_length)
+
+sentence_length_percentage <- mean(sentence_length_by_work$average_string_length > corpus_mean_string_length)
+
+sentence_long_short_percent <- all_works_punctuation %>%
+  group_by(title, code) %>%
+  summarise(
+    all_sentence = n(),
+    long_sentences = sum(string_length > corpus_mean_string_length)
+  ) %>%
+  mutate(percent_long = long_sentences / all_sentence)
+  
+sentence_long_short_percent
+
+```
+
+## Outlier analysis
+
+The following procedures were all performed on the various punctuation-marks. The results were, in turn, consolidated into one table, which was used in the paper.
+
+### String Length
+
+#### Distribution Chart
+
+```{r string_length_distrtibution}
+summary_punctuation %>% 
+ggplot(aes(x=string_length)) + 
+  geom_histogram(aes(y=after_stat(density)), colour="black", fill="white")+
+  geom_density(alpha=.2, fill="#FF6666")+
+  ggtitle("String Length Distribution")
+
+
+```
+
+#### QQ Plot
+
+```{r string_qqplot}
+string_length_shapiro <- shapiro.test(log1p(summary_punctuation$string_length))
+
+ggqqplot(log1p(summary_punctuation$string_length), xlab = "Text", title = paste("String Length Distribution", "Shapiro P value < ", round(string_length_shapiro$p.value,6))
+         )
+```
+
+#### Rosner Test
+
+```{r string_distribution}
+string_length_outlier <- boxplot.stats(log1p(summary_punctuation$string_length))$out
+string_length_outlier_rownumbers <- which(log1p(summary_punctuation$string_length) %in% c(string_length_outlier))
+
+string_length_test <- rosnerTest(log1p(summary_punctuation$string_length),
+  k = length(string_length_outlier_rownumbers)
+)
+string_length_outlier_obs <-  string_length_test$all.stats %>% 
+                       filter(Outlier ==TRUE) %>% 
+                       select(Obs.Num)
+
+#Write value to punctuation results
+
+string_length_outlier_result <- summary_punctuation[string_length_outlier_obs$Obs.Num,] %>% 
+                                ungroup() %>% 
+                                select(title, string_length)
+```
+
+
+
+#### Adjusted Boxplot
+
+```{r}
+string_length_adjusted_boxplot <-
+  boxB(summary_punctuation$string_length, method = "adjbox")
+string_length_boxplot_outlier_result <-
+  summary_punctuation[string_length_adjusted_boxplot$outliers, ] %>%
+  ungroup() %>%
+  select(title, string_length)
+```
+
+### Ellipse
+
+#### Distribution
+
+```{r ellipse_distribution}
+summary_punctuation %>%
+  ggplot(aes(x = ellipse)) +
+  geom_histogram(aes(y = ..density..),
+                 colour = "black",
+                 fill = "white") +
+  geom_density(alpha = .2, fill = "#FF6666") +
+  ggtitle("Ellipse Distribution")
+```
+
+#### QQ Plot
+
+```{r ellipse_qqplot}
+ellipse_shapiro <- shapiro.test(1/summary_punctuation$ellipse)
+
+ggqqplot(
+  log1p(summary_punctuation$ellipse),
+  xlab = "Text",
+  title = paste(
+    "Ellipse Distribution",
+    "Shapiro P value < ",
+    round(ellipse_shapiro$p.value, 6)
+  )
+)
+```
+
+#### Rosner Test
+
+```{r ellipse_rosner}
+#I tried working with the inverse here, but got mixed results. It pulls out all the low observations as unusual instead of simply seeing them as zero. It looks like both with the lognormal and the regular the top still clusters as outliers. This makes logically the most sense even if the data is pretty noisy and it is unclear how much value to attach to this.
+
+
+
+ellipse_outlier <-
+  boxplot.stats(log1p(summary_punctuation$ellipse))$out
+ellipse_outlier_rownumbers <-
+  which((log1p(summary_punctuation$ellipse)) %in% c(ellipse_outlier))
+
+ellipse_test <- rosnerTest((log1p(summary_punctuation$ellipse)),
+                           k = length(ellipse_outlier_rownumbers))
+ellipse_outlier_obs <-  ellipse_test$all.stats %>%
+  filter(Outlier == TRUE) %>%
+  select(Obs.Num)
+
+ellipse_outlier_result <-
+  summary_punctuation[ellipse_outlier_obs$Obs.Num, ] %>%
+  ungroup() %>%
+  select(title, ellipse)
+
+
+```
+
+#### Adjusted Boxplot
+
+```{r ellipse_adjusted_box}
+ellipse_adjusted_boxplot <-
+  boxB(summary_punctuation$ellipse, method = "adjbox")
+
+ellipse_boxplot_outlier_result <-
+  summary_punctuation[ellipse_adjusted_boxplot$outliers, ] %>%
+  ungroup() %>%
+  select(title, ellipse)
+
+
+```
+
+```{r}
+
+#Simple test to verify the most numerous result. As suspected, the top 5 are somewhat unexpected.
+
+summary_punctuation %>% 
+  ungroup() %>% 
+  # slice_max(ellipse,n=10) %>% 
+ 
+  ggplot( aes(x=date, y=ellipse)) + 
+  geom_bar(stat = "identity",position = position_dodge2(preserve = "single"))
+
+
+```
+
+```{r}
+# correlation_ellipse_short_story <- summary_punctuation %>%
+#   filter(ellipse>0) %>% 
+#   with(cor.test(date, ellipse))
+# 
+# correlation_ellipse_short_story
+```
+
+### Comma
+
+#### Distribution
+
+```{r comma_distribution}
+summary_punctuation %>%
+  ggplot(aes(x = comma)) +
+  geom_histogram(aes(y = ..density..),
+                 colour = "black",
+                 fill = "white") +
+  geom_density(alpha = .2, fill = "#FF6666") +
+  ggtitle("comma Distribution")
+```
+
+#### QQ Plot
+
+```{r comma_qqplot}
+comma_shapiro <- shapiro.test(summary_punctuation$ellipse)
+
+ggqqplot(summary_punctuation$comma, xlab = "Text", title = paste("Comma Distribution", "Shapiro P value < ", round(comma_shapiro$p.value,6))
+         )
+```
+
+#### Rosner Test
+
+```{r}
+comma_outlier <- boxplot.stats(summary_punctuation$comma)$out
+comma_outlier_rownumbers <-
+  which(summary_punctuation$comma %in% c(comma_outlier))
+
+comma_test <- rosnerTest(summary_punctuation$comma,
+                         k = length(comma_outlier_rownumbers))
+
+comma_outlier_obs <-  comma_test$all.stats %>%
+  filter(Outlier == TRUE) %>%
+  select(Obs.Num)
+
+comma_outlier_result <- summary_punctuation[comma_outlier_obs$Obs.Num,] %>% 
+                                ungroup() %>% 
+                                select(title, comma)
+
+
+```
+
+#### Adjusted Boxplot
+
+```{r comma_adjusted_boxplot}
+comma_adjusted_boxplot <-
+  boxB(summary_punctuation$comma, method = "adjbox")
+
+comma_boxplot_outlier_result <-
+  summary_punctuation[comma_adjusted_boxplot$outliers, ] %>%
+  ungroup() %>%
+  select(title, comma)
+
+
+```
+
+### Semi-Colon
+
+#### Distribution
+
+```{r semi_colon_distribution}
+summary_punctuation %>%
+  ggplot(aes(x = semi_colon)) +
+  geom_histogram(aes(y = ..density..),
+                 colour = "black",
+                 fill = "white") +
+  geom_density(alpha = .2, fill = "#FF6666") +
+  ggtitle("Semi-Colon Distribution")
+  
+```
+
+#### QQ Plot
+
+```{r semi_colon_qq}
+semi_colon_shapiro <- shapiro.test(summary_punctuation$semi_colon)
+
+ggqqplot(
+  log1p(summary_punctuation$semi_colon),
+  xlab = "Text",
+  title = paste(
+    "Semi-Colon's Per Word",
+    "Shapiro P value < ",
+    round(semi_colon_shapiro$p.value, 6)
+  )
+)
+```
+
+#### Rosner Test
+
+```{r semi_colon_rosner}
+semi_colon_outlier <-
+  boxplot.stats(log1p(summary_punctuation$semi_colon))$out
+semi_colon_outlier_rownumbers <-
+  which(log1p(summary_punctuation$semi_colon) %in% c(semi_colon_outlier))
+
+
+semi_colon_test <- rosnerTest(log1p(summary_punctuation$semi_colon),
+                              k = length(semi_colon_outlier_rownumbers))
+semi_colon_outlier_obs <-  semi_colon_test$all.stats %>%
+  filter(Outlier == TRUE) %>%
+  select(Obs.Num)
+
+semi_colon_outlier_result <-
+  summary_punctuation[semi_colon_outlier_obs$Obs.Num, ] %>%
+  ungroup() %>%
+  select(title, semi_colon)
+
+
+
+```
+
+#### Adjusted Box Plot
+
+```{r}
+semi_colon_adjusted_boxplot <- boxB(summary_punctuation$semi_colon, method="adjbox")
+
+semi_colon_boxplot_outlier_result <- summary_punctuation[semi_colon_adjusted_boxplot$outliers,] %>% 
+                                ungroup() %>% 
+                                select(title, semi_colon)
+
+
+```
+
+### Dash
+
+#### Distribution
+
+```{r}
+summary_punctuation %>% 
+
+ggplot(aes(x=dash)) +
+  geom_histogram(aes(y=..density..), colour="black", fill="white")+
+  geom_density(alpha=.2, fill="#FF6666")+
+   ggtitle("Dash Distribution")
+```
+
+#### Dash QQ Plot
+
+```{r}
+dash_shapiro <- shapiro.test(log1p(summary_punctuation$dash))
+
+ggqqplot(log1p(summary_punctuation$dash), xlab = "Text", title = paste("Dashes Per Word", "Shapiro P value < ", round(dash_shapiro$p.value,6))
+         )
+```
+
+#### Rosner Test
+
+```{r}
+dash_outlier <- boxplot.stats(log1p(summary_punctuation$dash))$out
+dash_outlier_rownumbers <- which(log1p(summary_punctuation$dash) %in% c(dash_outlier))
+
+dash_test <- rosnerTest(log1p(summary_punctuation$dash),
+  k = length(dash_outlier_rownumbers)
+)
+dash_outlier_obs <-  dash_test$all.stats %>% 
+                       filter(Outlier ==TRUE) %>% 
+                       select(Obs.Num)
+
+dash_outlier_result <- summary_punctuation[dash_outlier_obs$Obs.Num,] %>% 
+                                ungroup() %>% 
+                                select(title, dash)
+
+```
+
+#### Adjusted Boxplot
+
+```{r}
+dash_adjusted_boxplot <- boxB(summary_punctuation$dash, method="adjbox")
+
+dash_boxplot_outlier_result <- summary_punctuation[dash_adjusted_boxplot$outliers,] %>% 
+                                ungroup() %>% 
+                                select(title, dash)
+
+
+
+
+```
+
+### Colon
+
+#### Distribution
+
+```{r}
+summary_punctuation %>% 
+ggplot(aes(x = colon)) + 
+  geom_histogram(aes(y=..density..), colour="black", fill="white")+
+  geom_density(alpha=.2, fill="#FF6666")+
+  ggtitle("Colon Distribution")
+
+```
+
+#### QQ Plot
+
+```{r}
+colon_shapiro <- shapiro.test(1/summary_punctuation$colon)
+
+ggqqplot(log1p(summary_punctuation$colon), xlab = "Text", title = paste("Colons Per Word", "Shapiro P value < ", round(colon_shapiro$p.value,6))
+         )
+```
+
+#### Rosner Test
+
+```{r}
+colon_outlier <- boxplot.stats(log1p(summary_punctuation$colon))$out
+colon_outlier_rownumbers <- which(log1p(summary_punctuation$colon) %in% c(colon_outlier))
+
+colon_test <- rosnerTest(log1p(summary_punctuation$colon),
+  k = length(colon_outlier_rownumbers)
+)
+colon_outlier_obs <-  colon_test$all.stats %>% 
+                       filter(Outlier ==TRUE) %>% 
+                       select(Obs.Num)
+
+colon_outlier_result <- summary_punctuation[colon_outlier_obs$Obs.Num,] %>% 
+                                ungroup() %>% 
+                                select(title, colon)
+
+
+                       
+```
+
+#### Colon Adjusted Box Plot
+
+```{r}
+colon_adjusted_boxplot <- boxB(summary_punctuation$colon, method="adjbox")
+
+colon_boxplot_outlier_result <- summary_punctuation[colon_adjusted_boxplot$outliers,] %>% 
+                                ungroup() %>% 
+                                select(title, colon)
+
+
+```
+
+### Parenthesis
+
+#### Distribution
+
+```{r}
+summary_punctuation %>% 
+ggplot(aes(x = parenthesis)) + 
+ geom_histogram(aes(y=..density..), colour="black", fill="white")+
+  geom_density(alpha=.2, fill="#FF6666")+
+  ggtitle("Parenthesis Distribution")
+```
+
+#### QQ Plot
+
+```{r}
+parenthesis_shapiro <- shapiro.test(log1p(summary_punctuation$parenthesis))
+
+ggqqplot(log1p(summary_punctuation$parenthesis), xlab = "Text", title = paste("parenthesiss Per Word", "Shapiro P value < ", round(parenthesis_shapiro$p.value,6))
+         )
+```
+
+#### Rosner Test
+
+```{r}
+parenthesis_outlier <- boxplot.stats(log1p(summary_punctuation$parenthesis))$out
+parenthesis_outlier_rownumbers <- which(log1p(summary_punctuation$parenthesis) %in% c(parenthesis_outlier))
+
+parenthesis_test <- rosnerTest(log1p(summary_punctuation$parenthesis),
+  k = length(parenthesis_outlier_rownumbers)
+)
+parenthesis_outlier_obs <-  parenthesis_test$all.stats %>% 
+                       filter(Outlier ==TRUE) %>% 
+                       select(Obs.Num)
+
+parenthesis_outlier_result <- summary_punctuation[parenthesis_outlier_obs$Obs.Num,] %>% 
+                                ungroup() %>% 
+                                select(title, parenthesis)
+
+
+                       
+```
+
+#### Adjusted Box Plot
+
+```{r}
+parenthesis_adjusted_boxplot <- boxB(summary_punctuation$parenthesis, method="adjbox")
+
+parenthesis_boxplot_outlier_result <- summary_punctuation[parenthesis_adjusted_boxplot$outliers,] %>% 
+                                ungroup() %>% 
+                                select(title, parenthesis)
+
+
+```
+
+```{r}
+punctuation_results <- summary_punctuation %>% 
+                        select(title:type)
+```
+
+### All Outliers
+
+```{r}
+# Create punctuation result
+punctuation_results_full_table <- NULL
+punctuation_results_full_table <-  punctuation_results %>% 
+  left_join(string_length_outlier_result, by = join_by(title)) %>% 
+  rename(string_length_rosner = string_length) %>% 
+  left_join(string_length_boxplot_outlier_result, by = join_by(title)) %>%
+  rename(string_length_boxplot = string_length) %>% 
+  left_join(ellipse_outlier_result, by = join_by(title)) %>%
+  rename(ellipse_rosner = ellipse) %>% 
+  left_join(ellipse_boxplot_outlier_result, by = join_by(title)) %>% 
+  rename(ellipse_boxplot = ellipse) %>% 
+  left_join(comma_outlier_result, by = join_by(title)) %>%
+  rename(comma_rosner = comma) %>% 
+  left_join(comma_boxplot_outlier_result, by = join_by(title)) %>%
+  rename(comma_boxplot = comma) %>% 
+  left_join(semi_colon_outlier_result, by = join_by(title)) %>%
+  rename(semi_colon_rosner = semi_colon) %>% 
+  left_join(semi_colon_boxplot_outlier_result, by = join_by(title)) %>% 
+  rename(semi_colon_boxplot = semi_colon) %>% 
+  left_join(dash_outlier_result, by = join_by(title)) %>% 
+  rename(dash_rosner = dash) %>% 
+  left_join(dash_boxplot_outlier_result, by = join_by(title)) %>% 
+  rename(dash_boxplot = dash) %>% 
+  left_join(colon_outlier_result, by = join_by(title)) %>% 
+  rename(colon_rosner = colon) %>% 
+  left_join(colon_boxplot_outlier_result, by = join_by(title)) %>% 
+  rename(colon_boxplot = colon) %>% 
+  left_join(parenthesis_outlier_result, by = join_by(title)) %>% 
+  rename(parenthesis_rosner = parenthesis) %>% 
+  left_join(parenthesis_boxplot_outlier_result, by = join_by(title)) %>% 
+  rename(parenthesis_boxplot = parenthesis)
+
+
+```
+
+```{r}
+all_outliers <- punctuation_results_full_table %>% 
+  rowwise() %>% 
+  mutate(outlier = sum(c_across(where(is.numeric)), na.rm = T)) %>% 
+  mutate(outlier = ifelse(outlier>0,TRUE,FALSE)) %>% 
+  filter(outlier == TRUE)  %>% 
+  mutate_at(c(8,11), as.numeric)
+
+```
+
+```{r}
+all_outliers_count <- all_outliers %>% 
+    select(5:18) %>%  
+    is.na %>% 
+    `!` %>% 
+    rowSums
+
+all_outliers_count <- all_outliers %>% 
+  add_column(all_outliers_count)
+
+
+all_outliers_count
+```

@@ -1,0 +1,30 @@
+---
+project:
+  type: website
+  title: "Faulkner and Punctuation"
+  output-dir: docs
+
+website:
+  title: "White Paper: Faulkner and the Politics of the Long Sentence"
+  navbar:
+    left:
+      - href: index.qmd
+        text: Home
+      
+
+format:
+  html:
+    theme: cosmo
+    css: styles.css
+    toc: false
+---
+
+## Introduction
+
+The following is the 'white paper' for the essay 'Faulkner and the Politics of the Long Sentence' due to appear in *The History of Punctuation in English*. As the calculations for this project were quite involved, they have been separated into three different documents.
+
+-   Text processing: This shows the standard pre-cleaning done before any textual analysis.
+-   Outlier Detection: This covers the calculations done to detect outliers in punctuation-mark usage in all of Faulkner's fictions.
+-   Sentence and Demographic Correlation: Shows the process of creating a demographic database and also running Pearson correlations between different variables.
+
+In all cases, some raw data has been witheld. In particular this pertains to digitized copies of Faulkner's texts, the posting of which would violate copyright. Secondarily, the demographic data extracted from the *Digital Yoknapatawpha* database has also been masked, even if the results are available. This data belongs to all the scholars who worked so hard to create it, and I do not have singular authority to distribute it to anyone without their consent. We are happy to release the data for scholarly purposes.
